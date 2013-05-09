@@ -282,7 +282,6 @@ int timer_pool_add(int timers_cnt) /* {{{ */
 /* }}} */
 
 pthread_rwlock_t timertag_lock = PTHREAD_RWLOCK_INITIALIZER;
-int g_timertag_cnt;
 
 inline static int _add_timers(pinba_stats_record *record, const Pinba__Request *request, int *timertag_cnt, int request_id) /* {{{ */
 {
@@ -535,6 +534,7 @@ inline static int _add_timers(pinba_stats_record *record, const Pinba__Request *
 struct tag_reports_job_data {
 	int prefix;
 	int count;
+	int *timertag_cnt;
 };
 
 struct packets_job_data {
@@ -644,9 +644,7 @@ void update_tag_reports_delete_func(void *job_data) /* {{{ */
 	}
 	pthread_rwlock_unlock(&D->tag_reports_lock);
 
-	pthread_rwlock_wrlock(&timertag_lock);
-	g_timertag_cnt += timertag_cnt;
-	pthread_rwlock_unlock(&timertag_lock);
+	__sync_fetch_and_add(d->timertag_cnt, timertag_cnt);
 }
 /* }}} */
 
@@ -1073,6 +1071,8 @@ void *pinba_stats_main(void *arg) /* {{{ */
 					i++;
 				}
 
+				int timertag_cnt = 0;
+
 				if (deleted_timer_cnt > 0) {
 					if (num < (D->thread_pool->size * PINBA_THREAD_POOL_THRESHOLD_AMOUNT)) {
 						job_size = num;
@@ -1080,14 +1080,13 @@ void *pinba_stats_main(void *arg) /* {{{ */
 						job_size = num/D->thread_pool->size;
 					}
 
-					g_timertag_cnt = 0;
-
 					pthread_rwlock_wrlock(&D->timer_lock);
 
 					accounted = 0;
 					for (i = 0; i < D->thread_pool->size; i++) {
 						job_data_arr[i].prefix = prev_request_id + accounted;
 						job_data_arr[i].count = job_size;
+						job_data_arr[i].timertag_cnt = &timertag_cnt;
 						accounted += job_size;
 						if (accounted > num) {
 							job_data_arr[i].count -= (accounted - num);
@@ -1112,7 +1111,7 @@ void *pinba_stats_main(void *arg) /* {{{ */
 					} else {
 						timer_pool->out += deleted_timer_cnt;
 					}
-					D->timertags_cnt -= g_timertag_cnt;
+					D->timertags_cnt -= timertag_cnt;
 					pthread_rwlock_unlock(&D->timer_lock);
 				}
 			}
